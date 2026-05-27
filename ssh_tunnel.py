@@ -1200,7 +1200,7 @@ class App(ctk.CTk):
         def show(_): self.after(0, self.deiconify)
         def connect(_): self.after(0, self._on_connect)
         def disconnect(_): self.after(0, self._on_disconnect)
-        def quit_app(_): self.after(0, self._on_close)
+        def quit_app(_): self.after(0, self._shutdown)
 
         menu = TrayMenu(
             TrayItem(self.t("tray_show"),    show, default=True),
@@ -1531,12 +1531,23 @@ class App(ctk.CTk):
 
     def _shutdown(self):
         self._running = False
-        if self.tunnel.connected:
-            self.tunnel.disconnect(self._active_profile().get("mode","proxy"))
+        # Disconnect tunnel and clear proxy
+        try:
+            if self.tunnel.connected:
+                mode = self._pending_profile.get("mode", "proxy") if hasattr(self, '_pending_profile') else "proxy"
+                self.tunnel.disconnect(mode)
+        except Exception:
+            pass
+        # Stop tray icon
         if self._tray_icon:
             try: self._tray_icon.stop()
             except Exception: pass
-        self.destroy()
+        # Destroy window
+        try: self.destroy()
+        except Exception: pass
+        # Force-kill all threads including watchdog, tray, etc.
+        import os
+        os._exit(0)
 
     def _force_quit(self):
         self._shutdown()
