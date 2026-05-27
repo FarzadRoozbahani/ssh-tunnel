@@ -23,7 +23,7 @@ if errorlevel 1 (
 )
 
 echo [2/3] Building EXE...
-python -m PyInstaller --noconfirm --onefile --windowed --name SSH-Tunnel --hidden-import customtkinter --hidden-import paramiko --hidden-import PIL --hidden-import pystray --collect-all customtkinter ssh_tunnel.py
+python -m PyInstaller --noconfirm --onefile --windowed --name SSH-Tunnel --icon assets\app.ico --hidden-import customtkinter --hidden-import paramiko --hidden-import PIL --hidden-import pystray --collect-all customtkinter ssh_tunnel.py
 if errorlevel 1 (
     echo [ERROR] PyInstaller failed.
     pause

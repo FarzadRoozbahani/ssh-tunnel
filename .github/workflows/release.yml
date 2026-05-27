@@ -28,6 +28,7 @@ jobs:
             --onefile `
             --windowed `
             --name SSH-Tunnel `
+            --icon assets\app.ico `
             --hidden-import customtkinter `
             --hidden-import paramiko `
             --hidden-import PIL `
