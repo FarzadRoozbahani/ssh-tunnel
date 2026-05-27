@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200">
+  <defs>
+    <linearGradient id="bg2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#0f1117"/>
+      <stop offset="100%" style="stop-color:#1a1d27"/>
+    </linearGradient>
+    <linearGradient id="acc2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6b84ff"/>
+      <stop offset="100%" style="stop-color:#4f6ef7"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="800" height="200" rx="16" fill="url(#bg2)"/>
+
+  <!-- decorative grid lines -->
+  <line x1="0" y1="40"  x2="800" y2="40"  stroke="#2e3250" stroke-width="0.5" opacity="0.5"/>
+  <line x1="0" y1="80"  x2="800" y2="80"  stroke="#2e3250" stroke-width="0.5" opacity="0.5"/>
+  <line x1="0" y1="120" x2="800" y2="120" stroke="#2e3250" stroke-width="0.5" opacity="0.5"/>
+  <line x1="0" y1="160" x2="800" y2="160" stroke="#2e3250" stroke-width="0.5" opacity="0.5"/>
+  <line x1="160" y1="0" x2="160" y2="200" stroke="#2e3250" stroke-width="0.5" opacity="0.5"/>
+  <line x1="320" y1="0" x2="320" y2="200" stroke="#2e3250" stroke-width="0.5" opacity="0.5"/>
+  <line x1="480" y1="0" x2="480" y2="200" stroke="#2e3250" stroke-width="0.5" opacity="0.5"/>
+  <line x1="640" y1="0" x2="640" y2="200" stroke="#2e3250" stroke-width="0.5" opacity="0.5"/>
+
+  <!-- Mini logo -->
+  <g transform="translate(40,40) scale(0.94)">
+    <rect width="120" height="120" rx="26" fill="#21253a"/>
+    <circle cx="60" cy="60" r="40" fill="none" stroke="#2e3250" stroke-width="1.5"/>
+    <path d="M60 20 L84 32 L84 58 Q84 76 60 88 Q36 76 36 58 L36 32 Z"
+          fill="none" stroke="url(#acc2)" stroke-width="2.2" stroke-linejoin="round"/>
+    <rect x="48" y="54" width="24" height="18" rx="4" fill="url(#acc2)"/>
+    <path d="M52 54 L52 48 Q52 40 60 40 Q68 40 68 48 L68 54"
+          fill="none" stroke="url(#acc2)" stroke-width="2.8" stroke-linecap="round"/>
+    <circle cx="60" cy="62" r="3" fill="#21253a"/>
+    <rect x="58.5" y="62" width="3" height="5" rx="1" fill="#21253a"/>
+  </g>
+
+  <!-- Title -->
+  <text x="190" y="85" font-family="Segoe UI,system-ui,sans-serif" font-size="52"
+        font-weight="700" fill="#e2e8f0" letter-spacing="-1">SSH Tunnel</text>
+
+  <!-- Subtitle -->
+  <text x="193" y="122" font-family="Segoe UI,system-ui,sans-serif" font-size="20"
+        fill="#8892a4" letter-spacing="0.5">Secure SSH-based VPN &amp; SOCKS5 Proxy for Windows</text>
+
+  <!-- Badges row -->
+  <g transform="translate(193, 148)">
+    <rect width="90" height="26" rx="6" fill="#21253a" stroke="#2e3250" stroke-width="1"/>
+    <text x="45" y="17" font-family="monospace" font-size="12" fill="#4f6ef7"
+          text-anchor="middle">v3.0.0</text>
+
+    <rect x="98" width="90" height="26" rx="6" fill="#21253a" stroke="#2e3250" stroke-width="1"/>
+    <text x="143" y="17" font-family="monospace" font-size="12" fill="#22c55e"
+          text-anchor="middle">MIT License</text>
+
+    <rect x="196" width="90" height="26" rx="6" fill="#21253a" stroke="#2e3250" stroke-width="1"/>
+    <text x="241" y="17" font-family="monospace" font-size="12" fill="#8892a4"
+          text-anchor="middle">Windows 10+</text>
+
+    <rect x="294" width="90" height="26" rx="6" fill="#21253a" stroke="#2e3250" stroke-width="1"/>
+    <text x="339" y="17" font-family="monospace" font-size="12" fill="#8892a4"
+          text-anchor="middle">Python 3.10+</text>
+  </g>
+</svg>

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# PyInstaller output
+dist/
+build/
+
+# User config & logs (never commit personal data)
+*.ssh_vpn_config.json
+*.ssh_vpn.log
+.ssh_vpn_config.json
+.ssh_vpn.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets
+*.pem
+*.key
+*.ppk
+id_rsa
+id_ed25519
