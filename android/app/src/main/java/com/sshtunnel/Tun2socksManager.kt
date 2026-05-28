@@ -57,7 +57,7 @@ object Tun2socksManager {
                 }
             }, "tun2socks-log").apply { isDaemon = true }.start()
 
-            Log.i(TAG, "tun2socks started (pid=${process?.pid()})")
+            Log.i(TAG, "tun2socks started")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start tun2socks: ${e.message}")
