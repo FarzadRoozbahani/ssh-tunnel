@@ -2,12 +2,11 @@ package com.sshtunnel
 
 import android.app.*
 import android.content.Intent
-import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
-import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.tim06.vpnprotocols.singbox.SingBoxVpnService
 import kotlinx.coroutines.*
 
 private const val TAG = "SshVpnService"
@@ -24,8 +23,6 @@ class SshVpnService : VpnService() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var vpnIface: ParcelFileDescriptor? = null
-    private var forwarder: VpnPacketForwarder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -37,11 +34,14 @@ class SshVpnService : VpnService() {
 
     private fun doStop() {
         isRunning = false
-        forwarder?.stop()
-        forwarder = null
-        try { vpnIface?.close() } catch (_: Exception) {}
-        vpnIface = null
         scope.cancel()
+        // Stop sing-box VPN
+        try {
+            val stopIntent = Intent(this, SingBoxVpnService::class.java)
+            stopService(stopIntent)
+        } catch (e: Exception) {
+            Log.w(TAG, "sing-box stop: ${e.message}")
+        }
         TunnelManager.disconnect()
         TunnelStateHolder.setState(TunnelState.DISCONNECTED)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -57,55 +57,106 @@ class SshVpnService : VpnService() {
         val cfg = ProfileManager.getActive(this)
 
         scope.launch {
-            // Step 1: SSH + SOCKS5
+            // 1. Connect SSH + start SOCKS5
             when (val r = TunnelManager.connect(cfg)) {
                 is ConnectResult.Failure -> {
                     TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = r.error)
                     withContext(Dispatchers.Main) { doStop() }
                     return@launch
                 }
-                is ConnectResult.Success -> Log.i(TAG, "SSH ready")
+                is ConnectResult.Success -> Log.i(TAG, "SSH + SOCKS5 ready on :${cfg.socksPort}")
             }
 
-            // Step 2: Build TUN
-            val builder = Builder()
-                .setSession("SSH Tunnel")
-                .addAddress("10.8.0.2", 24)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                .addDnsServer("1.1.1.1")
-                .addDnsServer("8.8.8.8")
-                .setMtu(1500)
-                .setBlocking(false)
+            // 2. Build sing-box config that routes ALL traffic through our SOCKS5
+            val singboxConfig = buildSingboxConfig(cfg.socksPort, cfg.bypassDomains)
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", cfg.socksPort))
+            // 3. Start sing-box VPN service
+            withContext(Dispatchers.Main) {
+                try {
+                    val intent = SingBoxVpnService.createStartIntent(
+                        context = this@SshVpnService,
+                        config  = singboxConfig
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                        startForegroundService(intent)
+                    else
+                        startService(intent)
+
+                    notify("VPN active — all traffic tunneled")
+                    TunnelStateHolder.setState(TunnelState.CONNECTED, TunnelMode.VPN)
+                    scope.launch { watchdog() }
+                } catch (e: Exception) {
+                    Log.e(TAG, "sing-box start failed: ${e.message}")
+                    TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "VPN failed: ${e.message}")
+                    doStop()
+                }
             }
-
-            try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
-
-            val iface = builder.establish()
-            if (iface == null) {
-                TunnelManager.disconnect()
-                TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "VPN interface failed")
-                withContext(Dispatchers.Main) { doStop() }
-                return@launch
-            }
-            vpnIface = iface
-
-            // Step 3: Start packet forwarder TUN → SOCKS5
-            val fwd = VpnPacketForwarder(
-                vpnService = this@SshVpnService,
-                tunFd      = iface,
-                socksPort  = cfg.socksPort
-            )
-            fwd.start()
-            forwarder = fwd
-
-            withContext(Dispatchers.Main) { notify("VPN active — all traffic tunneled") }
-            TunnelStateHolder.setState(TunnelState.CONNECTED, TunnelMode.VPN)
-            watchdog()
         }
+    }
+
+    /**
+     * Generate a sing-box config that:
+     * - Routes all traffic through a TUN interface
+     * - Forwards everything to our local SOCKS5 (SSH tunnel)
+     * - Bypass list routes directly without VPN
+     */
+    private fun buildSingboxConfig(socksPort: Int, bypass: List<String>): String {
+        val bypassRules = bypass
+            .filter { it.isNotBlank() && !it.startsWith("ext:") }
+            .joinToString(",\n") { "          \"domain_suffix\": [\"$it\"]" }
+
+        val bypassSection = if (bypassRules.isNotBlank()) """
+        {
+          "type": "rule",
+          "domain_suffix": [${bypass.filter { it.isNotBlank() && !it.startsWith("ext:") }.joinToString(",") { "\"$it\"" }}],
+          "outbound": "direct"
+        },""" else ""
+
+        return """
+{
+  "log": { "level": "warn" },
+  "dns": {
+    "servers": [
+      { "tag": "remote", "address": "tls://1.1.1.1", "detour": "proxy" },
+      { "tag": "direct", "address": "223.5.5.5",     "detour": "direct" }
+    ],
+    "rules": [
+      { "outbound": "any", "server": "direct" }
+    ],
+    "final": "remote"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+      "mtu": 1500,
+      "auto_route": true,
+      "strict_route": true,
+      "stack": "system"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "socks",
+      "tag": "proxy",
+      "server": "127.0.0.1",
+      "server_port": $socksPort
+    },
+    { "type": "direct", "tag": "direct" },
+    { "type": "block",  "tag": "block"  },
+    { "type": "dns",    "tag": "dns-out" }
+  ],
+  "route": {
+    "rules": [
+      { "protocol": "dns", "outbound": "dns-out" },$bypassSection
+      { "ip_is_private": true, "outbound": "direct" }
+    ],
+    "final": "proxy",
+    "auto_detect_interface": true
+  }
+}
+""".trimIndent()
     }
 
     private fun watchdog() = scope.launch {
@@ -121,7 +172,7 @@ class SshVpnService : VpnService() {
     }
 
     override fun onDestroy() { doStop(); super.onDestroy() }
-    override fun onRevoke()  { doStop(); super.onRevoke() }
+    override fun onRevoke()  { doStop(); super.onRevoke()  }
 
     override fun onBind(intent: Intent?) =
         if (intent?.action == SERVICE_INTERFACE) super.onBind(intent) else null
@@ -147,6 +198,7 @@ class SshVpnService : VpnService() {
             .setContentIntent(openPi)
             .addAction(R.drawable.ic_tile, "Disconnect", stopPi)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 

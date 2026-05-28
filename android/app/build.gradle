@@ -12,7 +12,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode 5
-        versionName "1.5.0"
+        versionName "2.0.0"
     }
 
     buildTypes {
@@ -29,8 +29,11 @@ android {
     }
 
     kotlinOptions { jvmTarget = '17' }
-
     buildFeatures { viewBinding true }
+
+    packagingOptions {
+        jniLibs { useLegacyPackaging = true }
+    }
 }
 
 dependencies {
@@ -46,4 +49,7 @@ dependencies {
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
     implementation 'com.github.mwiede:jsch:0.2.17'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    // sing-box VPN SDK — includes native .so for real TUN VPN
+    implementation 'io.github.tim06:vpnprotocols-singBox:1.6.0'
 }
