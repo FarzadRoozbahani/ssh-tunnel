@@ -9,6 +9,8 @@ on:
 jobs:
   build-libbox:
     runs-on: ubuntu-latest
+    outputs:
+      platform_interface: ${{ steps.api.outputs.platform_interface }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,10 +29,9 @@ jobs:
           git clone --depth=1 --branch v1.10.3 \
             https://github.com/SagerNet/sing-box.git /tmp/sing-box
 
-      - name: Install sagernet/gomobile (sing-box's fork)
+      - name: Install sagernet/gomobile
         run: |
           cd /tmp/sing-box
-          # sing-box uses its own gomobile fork
           go install github.com/sagernet/gomobile/cmd/gomobile@latest
           go install github.com/sagernet/gomobile/cmd/gobind@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
@@ -38,10 +39,27 @@ jobs:
       - name: Build libbox.aar
         run: |
           cd /tmp/sing-box
-          # Use sing-box's own build script with correct flags
-          go run ./cmd/internal/build_libbox \
-            -target android
-          ls -lh /tmp/sing-box/libbox.aar
+          go run ./cmd/internal/build_libbox -target android
+          ls -lh libbox.aar
+
+      - name: Extract PlatformInterface methods
+        id: api
+        run: |
+          # Extract actual method names from Go source
+          grep -n "func.*PlatformInterface" /tmp/sing-box/experimental/libbox/platform.go \
+            || grep -rn "PlatformInterface" /tmp/sing-box/experimental/libbox/ | head -30
+          # Show TunOptions methods
+          grep -n "func.*TunOptions" /tmp/sing-box/experimental/libbox/*.go 2>/dev/null \
+            || find /tmp/sing-box/experimental/libbox -name "*.go" -exec grep -l "TunOptions\|PlatformInterface" {} \;
+
+      - name: Show libbox Go interfaces
+        run: |
+          echo "=== PlatformInterface ==="
+          cat /tmp/sing-box/experimental/libbox/platform.go 2>/dev/null \
+            || find /tmp/sing-box -name "platform.go" | head -3 | xargs cat
+          echo ""
+          echo "=== TunOptions ==="
+          grep -r "TunOptions\|Tun4Address\|Tun6Address" /tmp/sing-box/experimental/libbox/ | head -20
 
       - name: Upload libbox AAR
         uses: actions/upload-artifact@v4
