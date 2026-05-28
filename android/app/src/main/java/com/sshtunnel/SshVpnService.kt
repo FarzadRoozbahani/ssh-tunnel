@@ -10,6 +10,8 @@ import androidx.core.app.NotificationCompat
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.TunOptions
+import io.nekohasekai.libbox.InterfaceUpdateListener
+import io.nekohasekai.libbox.NetworkInterfaceIterator
 import kotlinx.coroutines.*
 import java.io.File
 
@@ -26,31 +28,52 @@ class SshVpnService : VpnService(), PlatformInterface {
             private set
     }
 
-    private val scope  = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var box: io.nekohasekai.libbox.BoxService? = null
     private var vpnIface: ParcelFileDescriptor? = null
 
-    // ── PlatformInterface (required by libbox) ────────────────
+    // ── PlatformInterface implementation ─────────────────────
     override fun usePlatformAutoDetectInterfaceControl() = true
-    override fun autoDetectInterfaceControl(fd: Int) { protect(fd) }
+
+    override fun autoDetectInterfaceControl(fd: Int): Exception? {
+        return if (protect(fd)) null
+        else Exception("protect failed")
+    }
+
     override fun openTun(options: TunOptions): Int {
         val builder = Builder()
             .setSession("SSH Tunnel")
             .setMtu(options.mtu.toInt())
 
-        options.inet4Addresses().forEach {
-            builder.addAddress(it.address(), it.prefix().toInt())
+        // Add addresses
+        var addrIter = options.inet4Addresses
+        while (addrIter.hasNext()) {
+            val a = addrIter.next()
+            builder.addAddress(a.address, a.prefix.toInt())
         }
-        options.inet6Addresses().forEach {
-            builder.addAddress(it.address(), it.prefix().toInt())
+        addrIter = options.inet6Addresses
+        while (addrIter.hasNext()) {
+            val a = addrIter.next()
+            builder.addAddress(a.address, a.prefix.toInt())
         }
-        options.inet4Routes().forEach {
-            builder.addRoute(it.address(), it.prefix().toInt())
+
+        // Add routes
+        var routeIter = options.inet4Routes
+        while (routeIter.hasNext()) {
+            val r = routeIter.next()
+            builder.addRoute(r.address, r.prefix.toInt())
         }
-        options.inet6Routes().forEach {
-            builder.addRoute(it.address(), it.prefix().toInt())
+        routeIter = options.inet6Routes
+        while (routeIter.hasNext()) {
+            val r = routeIter.next()
+            builder.addRoute(r.address, r.prefix.toInt())
         }
-        options.dnsServers().forEach { builder.addDnsServer(it) }
+
+        // DNS servers
+        var dnsIter = options.dnsServers
+        while (dnsIter.hasNext()) {
+            builder.addDnsServer(dnsIter.next())
+        }
 
         try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
 
@@ -58,19 +81,30 @@ class SshVpnService : VpnService(), PlatformInterface {
         return vpnIface?.fd ?: -1
     }
 
-    override fun closeTun() {
-        try { vpnIface?.close() } catch (_: Exception) {}
-        vpnIface = null
-    }
-
-    override fun writeLog(message: String) { Log.d(TAG, "libbox: $message") }
-    override fun errorHandler(err: String) { Log.e(TAG, "libbox error: $err") }
+    override fun writeLog(message: String) = Log.d(TAG, "libbox: $message")
     override fun useProcFS() = false
-    override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String,
-                                     sourcePort: Int, destAddress: String,
-                                     destPort: Int) = 0
-    override fun packageNameByUid(uid: Int) = ""
-    override fun uidByPackageName(packageName: String) = 0
+
+    override fun findConnectionOwner(
+        ipProtocol: Int, sourceAddress: String, sourcePort: Int,
+        destinationAddress: String, destinationPort: Int
+    ): Int = 0
+
+    override fun packageNameByUid(uid: Int): String = ""
+    override fun uidByPackageName(packageName: String): Int = 0
+
+    override fun usePlatformDefaultInterfaceMonitor() = true
+
+    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener): Exception? = null
+    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener): Exception? = null
+
+    override fun usePlatformInterfaceGetter() = false
+    override fun getInterfaces(): NetworkInterfaceIterator = EmptyNetworkInterfaceIterator()
+
+    override fun underNetworkExtension() = false
+    override fun includeAllNetworks() = false
+
+    override fun clearDNSCache() {}
+    override fun readWIFIState() = null
 
     // ── Service lifecycle ────────────────────────────────────
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -103,93 +137,76 @@ class SshVpnService : VpnService(), PlatformInterface {
         val cfg = ProfileManager.getActive(this)
 
         scope.launch {
-            // 1. SSH → SOCKS5
             when (val r = TunnelManager.connect(cfg)) {
                 is ConnectResult.Failure -> {
                     TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = r.error)
                     withContext(Dispatchers.Main) { doStop() }
                     return@launch
                 }
-                is ConnectResult.Success -> Log.i(TAG, "SSH+SOCKS5 ready :${cfg.socksPort}")
+                is ConnectResult.Success -> Log.i(TAG, "SSH+SOCKS5 on :${cfg.socksPort}")
             }
 
-            // 2. Write sing-box config to file
-            val configFile = File(filesDir, "singbox_config.json")
-            configFile.writeText(buildSingboxConfig(cfg.socksPort, cfg.bypassDomains))
+            val configFile = File(filesDir, "singbox.json")
+            configFile.writeText(buildConfig(cfg.socksPort, cfg.bypassDomains))
 
-            // 3. Start libbox
             try {
-                Libbox.setup(filesDir.absolutePath, filesDir.absolutePath, filesDir.absolutePath, false)
+                Libbox.setup(
+                    filesDir.absolutePath,
+                    filesDir.absolutePath,
+                    filesDir.absolutePath,
+                    false
+                )
 
-                val boxService = Libbox.newService(configFile.absolutePath, this@SshVpnService)
-                boxService.start()
-                box = boxService
+                val service = Libbox.newService(configFile.absolutePath, this@SshVpnService)
+                service.start()
+                box = service
 
-                withContext(Dispatchers.Main) {
-                    notify("VPN active — all traffic tunneled")
-                }
+                withContext(Dispatchers.Main) { notify("VPN active") }
                 TunnelStateHolder.setState(TunnelState.CONNECTED, TunnelMode.VPN)
                 watchdog()
 
             } catch (e: Exception) {
-                Log.e(TAG, "libbox failed: ${e.message}")
+                Log.e(TAG, "libbox error: ${e.message}")
                 TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "VPN error: ${e.message}")
                 withContext(Dispatchers.Main) { doStop() }
             }
         }
     }
 
-    private fun buildSingboxConfig(socksPort: Int, bypass: List<String>): String {
-        val bypassDomains = bypass
+    private fun buildConfig(socksPort: Int, bypass: List<String>): String {
+        val bypassList = bypass
             .filter { it.isNotBlank() && !it.startsWith("ext:") }
             .joinToString(",") { "\"$it\"" }
 
-        val bypassRule = if (bypassDomains.isNotBlank()) """
-        {
-          "type": "logical",
-          "mode": "or",
-          "rules": [{ "domain_suffix": [$bypassDomains] }],
-          "outbound": "direct"
-        },""" else ""
+        val bypassRule = if (bypassList.isNotBlank())
+            """{ "domain_suffix": [$bypassList], "outbound": "direct" },"""
+        else ""
 
         return """
 {
-  "log": { "level": "warn", "output": "stderr" },
+  "log": { "level": "warn" },
   "dns": {
     "servers": [
-      { "tag": "proxy-dns", "address": "tls://1.1.1.1", "detour": "proxy" },
-      { "tag": "local-dns", "address": "223.5.5.5",     "detour": "direct" }
+      { "tag": "remote", "address": "tls://1.1.1.1", "detour": "proxy" },
+      { "tag": "local",  "address": "223.5.5.5",     "detour": "direct" }
     ],
-    "rules": [
-      { "outbound": "any", "server": "local-dns" }
-    ],
-    "final": "proxy-dns",
-    "independent_cache": true
+    "rules": [{ "outbound": "any", "server": "local" }],
+    "final": "remote"
   },
-  "inbounds": [
-    {
-      "type": "tun",
-      "tag":  "tun-in",
-      "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
-      "mtu": 9000,
-      "auto_route": true,
-      "strict_route": true,
-      "stack": "system",
-      "sniff": true,
-      "sniff_override_destination": false
-    }
-  ],
+  "inbounds": [{
+    "type": "tun", "tag": "tun-in",
+    "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+    "mtu": 9000,
+    "auto_route": true,
+    "strict_route": true,
+    "stack": "system",
+    "sniff": true
+  }],
   "outbounds": [
-    {
-      "type": "socks",
-      "tag":  "proxy",
-      "server": "127.0.0.1",
-      "server_port": $socksPort,
-      "version": "5"
-    },
-    { "type": "direct", "tag": "direct" },
-    { "type": "block",  "tag": "block"  },
-    { "type": "dns",    "tag": "dns-out" }
+    { "type": "socks", "tag": "proxy",  "server": "127.0.0.1", "server_port": $socksPort },
+    { "type": "direct","tag": "direct" },
+    { "type": "block", "tag": "block"  },
+    { "type": "dns",   "tag": "dns-out"}
   ],
   "route": {
     "rules": [
@@ -207,7 +224,6 @@ class SshVpnService : VpnService(), PlatformInterface {
         while (isRunning) {
             delay(5_000)
             if (!TunnelManager.isAlive()) {
-                Log.w(TAG, "SSH lost")
                 TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "Connection lost")
                 withContext(Dispatchers.Main) { doStop() }
                 break
@@ -247,4 +263,10 @@ class SshVpnService : VpnService(), PlatformInterface {
 
     private fun notify(text: String) =
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotif(text))
+}
+
+// Empty iterator for when platform interface getter is disabled
+class EmptyNetworkInterfaceIterator : NetworkInterfaceIterator {
+    override fun hasNext() = false
+    override fun next() = throw NoSuchElementException()
 }
