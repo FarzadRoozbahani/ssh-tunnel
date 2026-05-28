@@ -10,7 +10,7 @@ class TunnelTileService : TileService() {
 
     companion object {
         private var instance: TunnelTileService? = null
-        fun requestUpdate() { instance?.updateTile(TunnelStateHolder.current.state) }
+        fun requestUpdate() { instance?.applyState(TunnelStateHolder.current.state) }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -18,11 +18,9 @@ class TunnelTileService : TileService() {
     override fun onStartListening() {
         super.onStartListening()
         instance = this
-        // Sync tile with current state immediately
-        updateTile(TunnelStateHolder.current.state)
-        // Keep syncing while tile is visible
+        applyState(TunnelStateHolder.current.state)
         scope.launch {
-            TunnelStateHolder.status.collect { updateTile(it.state) }
+            TunnelStateHolder.status.collect { applyState(it.state) }
         }
     }
 
@@ -35,11 +33,13 @@ class TunnelTileService : TileService() {
     override fun onClick() {
         super.onClick()
         if (TunnelStateHolder.isConnected) {
-            // Disconnect
-            applicationContext.stopService(Intent(applicationContext, SshProxyService::class.java))
-            applicationContext.stopService(Intent(applicationContext, SshVpnService::class.java))
+            // Stop — send explicit STOP action
+            applicationContext.startService(
+                Intent(applicationContext, SshProxyService::class.java).apply { action = SshProxyService.ACTION_STOP })
+            applicationContext.startService(
+                Intent(applicationContext, SshVpnService::class.java).apply { action = SshVpnService.ACTION_STOP })
         } else {
-            val action = Runnable {
+            val startAction = Runnable {
                 val cfg = ProfileManager.getActive(applicationContext)
                 val intent = when (cfg.mode) {
                     TunnelMode.VPN    -> Intent(applicationContext, SshVpnService::class.java).apply { action = SshVpnService.ACTION_START }
@@ -50,11 +50,11 @@ class TunnelTileService : TileService() {
                 else
                     applicationContext.startService(intent)
             }
-            if (isLocked) unlockAndRun(action) else action.run()
+            if (isLocked) unlockAndRun(startAction) else startAction.run()
         }
     }
 
-    private fun updateTile(state: TunnelState) {
+    private fun applyState(state: TunnelState) {
         val tile = qsTile ?: return
         when (state) {
             TunnelState.CONNECTED -> {

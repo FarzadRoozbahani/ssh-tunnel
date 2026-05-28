@@ -44,18 +44,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupTabs() {
-        val fragments = listOf(
-            ConnectFragment(),
-            BypassFragment(),
-            SettingsFragment()
-        )
-        val titles = listOf("Connect", "Bypass", "Settings")
+        val fragments = listOf(ConnectFragment(), BypassFragment(), SettingsFragment())
+        val titles    = listOf("Connect", "Bypass", "Settings")
 
         b.viewPager.adapter = object : androidx.viewpager2.adapter.FragmentStateAdapter(this) {
             override fun getItemCount() = fragments.size
             override fun createFragment(pos: Int): Fragment = fragments[pos]
         }
-        b.viewPager.isUserInputEnabled = false  // disable swipe
+        b.viewPager.isUserInputEnabled = false
 
         TabLayoutMediator(b.tabLayout, b.viewPager) { tab, pos ->
             tab.text = titles[pos]
@@ -68,7 +64,7 @@ class MainActivity : AppCompatActivity() {
                 when (status.state) {
                     TunnelState.DISCONNECTED -> {
                         b.statusDot.setBackgroundResource(R.drawable.dot_red)
-                        b.tvStatus.text = "Disconnected"
+                        b.tvStatus.text = if (status.message.isNotBlank()) status.message else "Disconnected"
                     }
                     TunnelState.CONNECTING -> {
                         b.statusDot.setBackgroundResource(R.drawable.dot_yellow)
@@ -76,8 +72,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     TunnelState.CONNECTED -> {
                         b.statusDot.setBackgroundResource(R.drawable.dot_green)
-                        val m = if (status.mode == TunnelMode.VPN) "VPN" else "SOCKS5"
-                        b.tvStatus.text = "Connected — $m"
+                        b.tvStatus.text = "Connected — ${if (status.mode == TunnelMode.VPN) "VPN" else "SOCKS5"}"
                     }
                 }
             }
@@ -95,8 +90,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun stopTunnel() {
-        stopService(Intent(this, SshProxyService::class.java))
-        stopService(Intent(this, SshVpnService::class.java))
+        // Send explicit STOP action to whichever service is running
+        startService(Intent(this, SshProxyService::class.java).apply { action = SshProxyService.ACTION_STOP })
+        startService(Intent(this, SshVpnService::class.java).apply { action = SshVpnService.ACTION_STOP })
     }
 
     private fun doStartTunnel() {
