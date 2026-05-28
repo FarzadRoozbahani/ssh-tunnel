@@ -9,8 +9,6 @@ on:
 jobs:
   build-libbox:
     runs-on: ubuntu-latest
-    outputs:
-      platform_interface: ${{ steps.api.outputs.platform_interface }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,30 +34,31 @@ jobs:
           go install github.com/sagernet/gomobile/cmd/gobind@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
+      - name: Show EXACT libbox API
+        run: |
+          echo "=== PlatformInterface ==="
+          cat /tmp/sing-box/experimental/libbox/platform_interface.go 2>/dev/null || \
+          grep -r "type PlatformInterface" /tmp/sing-box/experimental/libbox/ -A 30
+
+          echo ""
+          echo "=== TunOptions methods ==="
+          grep -r "func.*TunOptions" /tmp/sing-box/experimental/libbox/ | head -40
+
+          echo ""
+          echo "=== All Go files in libbox ==="
+          ls /tmp/sing-box/experimental/libbox/*.go
+
+          echo ""
+          echo "=== tun.go or similar ==="
+          cat /tmp/sing-box/experimental/libbox/tun.go 2>/dev/null || \
+          grep -r "Inet4Address\|Inet6Address\|Route\|DnsServer\|GetInet" \
+            /tmp/sing-box/experimental/libbox/ | head -30
+
       - name: Build libbox.aar
         run: |
           cd /tmp/sing-box
           go run ./cmd/internal/build_libbox -target android
           ls -lh libbox.aar
-
-      - name: Extract PlatformInterface methods
-        id: api
-        run: |
-          # Extract actual method names from Go source
-          grep -n "func.*PlatformInterface" /tmp/sing-box/experimental/libbox/platform.go \
-            || grep -rn "PlatformInterface" /tmp/sing-box/experimental/libbox/ | head -30
-          # Show TunOptions methods
-          grep -n "func.*TunOptions" /tmp/sing-box/experimental/libbox/*.go 2>/dev/null \
-            || find /tmp/sing-box/experimental/libbox -name "*.go" -exec grep -l "TunOptions\|PlatformInterface" {} \;
-
-      - name: Show libbox Go interfaces
-        run: |
-          echo "=== PlatformInterface ==="
-          cat /tmp/sing-box/experimental/libbox/platform.go 2>/dev/null \
-            || find /tmp/sing-box -name "platform.go" | head -3 | xargs cat
-          echo ""
-          echo "=== TunOptions ==="
-          grep -r "TunOptions\|Tun4Address\|Tun6Address" /tmp/sing-box/experimental/libbox/ | head -20
 
       - name: Upload libbox AAR
         uses: actions/upload-artifact@v4
