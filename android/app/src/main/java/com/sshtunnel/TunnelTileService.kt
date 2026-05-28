@@ -8,86 +8,71 @@ import kotlinx.coroutines.*
 
 class TunnelTileService : TileService() {
 
+    companion object {
+        private var instance: TunnelTileService? = null
+        fun requestUpdate() { instance?.updateTile(TunnelStateHolder.current.state) }
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onStartListening() {
         super.onStartListening()
+        instance = this
+        // Sync tile with current state immediately
+        updateTile(TunnelStateHolder.current.state)
+        // Keep syncing while tile is visible
         scope.launch {
-            TunnelStateHolder.status.collect { status ->
-                updateTile(status.state)
-            }
+            TunnelStateHolder.status.collect { updateTile(it.state) }
         }
     }
 
     override fun onStopListening() {
+        instance = null
         scope.coroutineContext.cancelChildren()
         super.onStopListening()
     }
 
     override fun onClick() {
         super.onClick()
-        val cfg = ProfileManager.getActive(applicationContext)
-
         if (TunnelStateHolder.isConnected) {
-            // Stop whichever service is running
-            stopService(Intent(applicationContext, SshProxyService::class.java))
-            stopService(Intent(applicationContext, SshVpnService::class.java))
+            // Disconnect
+            applicationContext.stopService(Intent(applicationContext, SshProxyService::class.java))
+            applicationContext.stopService(Intent(applicationContext, SshVpnService::class.java))
         } else {
-            // Need to unlock device first on secure lockscreens
-            if (isLocked) {
-                unlockAndRun { launchTunnel(cfg) }
-            } else {
-                launchTunnel(cfg)
+            val action = {
+                val cfg = ProfileManager.getActive(applicationContext)
+                val intent = when (cfg.mode) {
+                    TunnelMode.VPN    -> Intent(applicationContext, SshVpnService::class.java).apply { action = SshVpnService.ACTION_START }
+                    TunnelMode.SOCKS5 -> Intent(applicationContext, SshProxyService::class.java).apply { action = SshProxyService.ACTION_START }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    applicationContext.startForegroundService(intent)
+                else
+                    applicationContext.startService(intent)
             }
-        }
-    }
-
-    private fun launchTunnel(cfg: TunnelConfig) {
-        TunnelStateHolder.setState(TunnelState.CONNECTING, cfg.mode)
-        updateTile(TunnelState.CONNECTING)
-
-        val intent = when (cfg.mode) {
-            TunnelMode.VPN -> Intent(applicationContext, SshVpnService::class.java).apply {
-                action = SshVpnService.ACTION_START
-            }
-            TunnelMode.SOCKS5 -> Intent(applicationContext, SshProxyService::class.java).apply {
-                action = SshProxyService.ACTION_START
-            }
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            applicationContext.startForegroundService(intent)
-        } else {
-            applicationContext.startService(intent)
+            if (isLocked) unlockAndRun(action) else action()
         }
     }
 
     private fun updateTile(state: TunnelState) {
-        qsTile?.apply {
-            when (state) {
-                TunnelState.CONNECTED -> {
-                    this.state = Tile.STATE_ACTIVE
-                    label = "SSH Tunnel"
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        subtitle = "Connected"
-                    }
-                }
-                TunnelState.CONNECTING -> {
-                    this.state = Tile.STATE_UNAVAILABLE
-                    label = "SSH Tunnel"
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        subtitle = "Connecting…"
-                    }
-                }
-                TunnelState.DISCONNECTED -> {
-                    this.state = Tile.STATE_INACTIVE
-                    label = "SSH Tunnel"
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        subtitle = "Tap to connect"
-                    }
-                }
+        val tile = qsTile ?: return
+        when (state) {
+            TunnelState.CONNECTED -> {
+                tile.state = Tile.STATE_ACTIVE
+                tile.label = "SSH Tunnel"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = "Connected"
             }
-            updateTile()
+            TunnelState.CONNECTING -> {
+                tile.state = Tile.STATE_UNAVAILABLE
+                tile.label = "SSH Tunnel"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = "Connecting…"
+            }
+            TunnelState.DISCONNECTED -> {
+                tile.state = Tile.STATE_INACTIVE
+                tile.label = "SSH Tunnel"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = "Tap to connect"
+            }
         }
+        tile.updateTile()
     }
 }

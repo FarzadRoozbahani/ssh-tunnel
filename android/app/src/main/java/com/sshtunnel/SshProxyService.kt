@@ -12,16 +12,17 @@ class SshProxyService : Service() {
     companion object {
         const val ACTION_START  = "com.sshtunnel.PROXY_START"
         const val ACTION_STOP   = "com.sshtunnel.PROXY_STOP"
-        const val CHANNEL_ID    = "ssh_proxy_channel"
+        const val CHANNEL_ID    = "ssh_proxy"
         const val NOTIF_ID      = 1001
         var isRunning           = false
+            private set
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startProxy()
+            ACTION_START -> if (!isRunning) startProxy()
             ACTION_STOP  -> stopSelf()
         }
         return START_NOT_STICKY
@@ -29,37 +30,35 @@ class SshProxyService : Service() {
 
     private fun startProxy() {
         createChannel()
-        startForeground(NOTIF_ID, buildNotification("Connecting…"))
         isRunning = true
+        startForeground(NOTIF_ID, buildNotif("Connecting…"))
+        TunnelStateHolder.setState(TunnelState.CONNECTING)
 
         val cfg = ProfileManager.getActive(this)
         scope.launch {
             when (val r = TunnelManager.connect(cfg)) {
                 is ConnectResult.Success -> {
-                    updateNotification("SOCKS5 active — :${cfg.socksPort}")
-                    TunnelStateHolder.setState(TunnelState.CONNECTED, cfg.mode)
-                    startWatchdog()
+                    notify("SOCKS5 — :${cfg.socksPort}")
+                    TunnelStateHolder.setState(TunnelState.CONNECTED, cfg.mode, r.message)
+                    watchdog()
                 }
                 is ConnectResult.Failure -> {
-                    TunnelStateHolder.setState(TunnelState.DISCONNECTED)
-                    updateNotification("Failed: ${r.error}")
+                    TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = r.error)
                     stopSelf()
                 }
             }
         }
     }
 
-    private fun startWatchdog() {
-        scope.launch(Dispatchers.IO) {
-            while (isRunning && TunnelManager.isAlive()) {
-                delay(5_000)
-            }
-            if (isRunning) {
+    private fun watchdog() = scope.launch(Dispatchers.IO) {
+        while (isRunning) {
+            delay(4_000)
+            if (!TunnelManager.isAlive()) {
                 withContext(Dispatchers.Main) {
-                    TunnelStateHolder.setState(TunnelState.DISCONNECTED)
-                    updateNotification("Disconnected")
+                    TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "Connection lost")
                     stopSelf()
                 }
+                break
             }
         }
     }
@@ -76,19 +75,17 @@ class SshProxyService : Service() {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CHANNEL_ID, "SSH Proxy", NotificationManager.IMPORTANCE_LOW)
-            ch.description = "SSH Tunnel proxy service"
+            val ch = NotificationChannel(CHANNEL_ID, "SSH Tunnel", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
 
-    private fun buildNotification(text: String): Notification {
-        val stopIntent = Intent(this, SshProxyService::class.java).apply { action = ACTION_STOP }
-        val stopPi = PendingIntent.getService(this, 0, stopIntent,
+    private fun buildNotif(text: String): Notification {
+        val stopPi = PendingIntent.getService(this, 0,
+            Intent(this, SshProxyService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-
-        val openIntent = Intent(this, MainActivity::class.java)
-        val openPi = PendingIntent.getActivity(this, 0, openIntent,
+        val openPi = PendingIntent.getActivity(this, 0,
+            Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -98,11 +95,10 @@ class SshProxyService : Service() {
             .setContentIntent(openPi)
             .addAction(R.drawable.ic_tile, "Disconnect", stopPi)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
-    private fun updateNotification(text: String) {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIF_ID, buildNotification(text))
-    }
+    private fun notify(text: String) =
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotif(text))
 }

@@ -8,8 +8,10 @@
         <item name="colorOnSurface">@color/text</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:textColor">@color/text</item>
+        <item name="android:editTextColor">@color/text</item>
         <item name="android:statusBarColor">@color/surface</item>
         <item name="android:navigationBarColor">@color/bg</item>
+        <item name="editTextColor">@color/text</item>
     </style>
 
     <style name="InputStyle" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox.Dense">
@@ -17,5 +19,6 @@
         <item name="boxBackgroundColor">@color/card</item>
         <item name="hintTextColor">@color/text_muted</item>
         <item name="android:textColorHint">@color/text_muted</item>
+        <item name="android:textColor">@color/text</item>
     </style>
 </resources>
