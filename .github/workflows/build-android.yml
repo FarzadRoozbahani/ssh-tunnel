@@ -94,17 +94,20 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/build.log; exit ${PIPESTATUS[0]}
+        run: |
+          set +e
+          ./gradlew assembleDebug --no-daemon --stacktrace > /tmp/build.log 2>&1
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "=== BUILD ERRORS ==="
+            grep -E "error:|Error:|FAILED|Unresolved|abstract|not.*implement" /tmp/build.log | head -50
+            echo "=== LAST 50 LINES ==="
+            tail -50 /tmp/build.log
+          fi
+          exit $EXIT_CODE
         env:
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2g"
-
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: /tmp/build.log
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
