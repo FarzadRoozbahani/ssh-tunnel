@@ -1,0 +1,3 @@
+# tun2socks binaries are downloaded here by CI
+# arm64-v8a/tun2socks  → arm64
+# armeabi-v7a/tun2socks → arm32

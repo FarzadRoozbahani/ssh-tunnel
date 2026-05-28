@@ -11,8 +11,8 @@ android {
         applicationId "com.sshtunnel"
         minSdk 26
         targetSdk 34
-        versionCode 3
-        versionName "1.3.0"
+        versionCode 4
+        versionName "1.4.0"
     }
 
     buildTypes {
@@ -32,9 +32,11 @@ android {
 
     buildFeatures { viewBinding true }
 
-    // Include local AARs from libs/ folder
-    repositories {
-        flatDir { dirs 'libs' }
+    // Bundle tun2socks binaries from assets
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
     }
 }
 
@@ -51,7 +53,4 @@ dependencies {
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
     implementation 'com.github.mwiede:jsch:0.2.17'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
-
-    // tun2socks AAR (built by CI from Go source)
-    implementation(name: 'tun2socks', ext: 'aar')
 }

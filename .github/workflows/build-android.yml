@@ -7,59 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-tun2socks:
+  build:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Set up Android NDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'ndk;25.2.9519653'
-          accept-android-sdk-licenses: true
-
-      - name: Setup gomobile workspace
-        run: |
-          MOBILE_VERSION=v0.0.0-20240213143359-d1f7d3436075
-
-          # Create a temp module to download mobile source
-          mkdir -p /tmp/mobile_setup
-          cd /tmp/mobile_setup
-          go mod init mobile_setup
-          go get golang.org/x/mobile@${MOBILE_VERSION}
-
-          # Install binaries
-          go install golang.org/x/mobile/cmd/gobind@${MOBILE_VERSION}
-          go install golang.org/x/mobile/cmd/gomobile@${MOBILE_VERSION}
-          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-
-      - name: gomobile init
-        run: gomobile init
-
-      - name: Build tun2socks AAR
-        working-directory: android/tun2socks
-        run: |
-          go mod tidy
-          gomobile bind \
-            -target=android/arm64,android/arm,android/amd64 \
-            -androidapi 26 \
-            -javapkg Tun2socks \
-            -o tun2socks.aar \
-            .
-
-      - name: Upload AAR
-        uses: actions/upload-artifact@v4
-        with:
-          name: tun2socks-aar
-          path: android/tun2socks/tun2socks.aar
-
-  build-apk:
-    runs-on: ubuntu-latest
-    needs: build-tun2socks
     steps:
       - uses: actions/checkout@v4
 
@@ -74,11 +23,37 @@ jobs:
           packages: 'platforms;android-34 build-tools;34.0.0'
           accept-android-sdk-licenses: true
 
-      - name: Download tun2socks AAR
-        uses: actions/download-artifact@v4
-        with:
-          name: tun2socks-aar
-          path: android/app/libs/
+      - name: Download tun2socks binaries
+        run: |
+          VERSION="v2.6.0"
+          BASE="https://github.com/xjasonlyu/tun2socks/releases/download/${VERSION}"
+
+          # arm64
+          mkdir -p android/app/src/main/assets/arm64-v8a
+          wget -q "${BASE}/tun2socks-linux-arm64.zip" -O /tmp/t2s-arm64.zip
+          unzip -o /tmp/t2s-arm64.zip -d /tmp/t2s-arm64/
+          mv /tmp/t2s-arm64/tun2socks-linux-arm64 \
+             android/app/src/main/assets/arm64-v8a/tun2socks
+          chmod +x android/app/src/main/assets/arm64-v8a/tun2socks
+
+          # armv7
+          mkdir -p android/app/src/main/assets/armeabi-v7a
+          wget -q "${BASE}/tun2socks-linux-armv7.zip" -O /tmp/t2s-armv7.zip
+          unzip -o /tmp/t2s-armv7.zip -d /tmp/t2s-armv7/
+          mv /tmp/t2s-armv7/tun2socks-linux-armv7 \
+             android/app/src/main/assets/armeabi-v7a/tun2socks
+          chmod +x android/app/src/main/assets/armeabi-v7a/tun2socks
+
+          # x86_64 (emulator)
+          mkdir -p android/app/src/main/assets/x86_64
+          wget -q "${BASE}/tun2socks-linux-amd64.zip" -O /tmp/t2s-x64.zip
+          unzip -o /tmp/t2s-x64.zip -d /tmp/t2s-x64/
+          mv /tmp/t2s-x64/tun2socks-linux-amd64 \
+             android/app/src/main/assets/x86_64/tun2socks
+          chmod +x android/app/src/main/assets/x86_64/tun2socks
+
+          echo "✓ tun2socks binaries ready"
+          ls -lh android/app/src/main/assets/*/tun2socks
 
       - name: Grant execute permission
         run: chmod +x android/gradlew
