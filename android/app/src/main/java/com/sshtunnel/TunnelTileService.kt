@@ -39,7 +39,7 @@ class TunnelTileService : TileService() {
             applicationContext.stopService(Intent(applicationContext, SshProxyService::class.java))
             applicationContext.stopService(Intent(applicationContext, SshVpnService::class.java))
         } else {
-            val action = {
+            val action = Runnable {
                 val cfg = ProfileManager.getActive(applicationContext)
                 val intent = when (cfg.mode) {
                     TunnelMode.VPN    -> Intent(applicationContext, SshVpnService::class.java).apply { action = SshVpnService.ACTION_START }
@@ -50,7 +50,7 @@ class TunnelTileService : TileService() {
                 else
                     applicationContext.startService(intent)
             }
-            if (isLocked) unlockAndRun(action) else action()
+            if (isLocked) unlockAndRun(action) else action.run()
         }
     }
 
