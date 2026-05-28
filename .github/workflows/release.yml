@@ -1,9 +1,10 @@
-name: Build and Release
+name: Build and Release Windows
 
 on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -36,10 +37,17 @@ jobs:
             --collect-all customtkinter `
             ssh_tunnel.py
 
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSH-Tunnel-Windows
+          path: dist/SSH-Tunnel.exe
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/SSH-Tunnel.exe
+          name: SSH Tunnel ${{ github.ref_name }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
