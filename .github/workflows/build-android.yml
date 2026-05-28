@@ -15,12 +15,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache-dependency-path: android/tun2socks/go.sum
 
-      - name: Install gomobile
+      - name: Install gomobile and gobind
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
-          gomobile init
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20240213143359-d1f7d3436075
+          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20240213143359-d1f7d3436075
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: Set up Android NDK
         uses: android-actions/setup-android@v3
@@ -28,13 +29,18 @@ jobs:
           packages: 'ndk;25.2.9519653'
           accept-android-sdk-licenses: true
 
-      - name: Build tun2socks AAR
+      - name: Init gomobile
+        run: gomobile init
+
+      - name: Tidy and build tun2socks AAR
         working-directory: android/tun2socks
         run: |
+          go get golang.org/x/mobile@v0.0.0-20240213143359-d1f7d3436075
           go mod tidy
           gomobile bind \
-            -target=android/arm64,android/arm \
+            -target=android/arm64,android/arm,android/amd64 \
             -androidapi 26 \
+            -javapkg Tun2socks \
             -o tun2socks.aar \
             .
 
@@ -67,12 +73,12 @@ jobs:
           name: tun2socks-aar
           path: android/app/libs/
 
-      - name: Grant execute permission to gradlew
+      - name: Grant execute permission
         run: chmod +x android/gradlew
 
-      - name: Build Debug APK
+      - name: Build APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --warning-mode all
+        run: ./gradlew assembleDebug --no-daemon
         env:
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2g"
