@@ -11,8 +11,8 @@ android {
         applicationId "com.sshtunnel"
         minSdk 26
         targetSdk 34
-        versionCode 5
-        versionName "2.0.0"
+        versionCode 6
+        versionName "2.1.0"
     }
 
     buildTypes {
@@ -34,6 +34,10 @@ android {
     packagingOptions {
         jniLibs { useLegacyPackaging = true }
     }
+
+    repositories {
+        flatDir { dirs 'libs' }
+    }
 }
 
 dependencies {
@@ -50,6 +54,6 @@ dependencies {
     implementation 'com.github.mwiede:jsch:0.2.17'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
-    // sing-box VPN SDK — includes native .so for real TUN VPN
-    implementation 'io.github.tim06:vpnprotocols-singBox:1.6.0'
+    // libbox — sing-box core for Android VPN (built from source in CI)
+    implementation(name: 'libbox', ext: 'aar')
 }

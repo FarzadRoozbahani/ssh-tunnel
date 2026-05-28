@@ -61,17 +61,6 @@
                 android:value="true" />
         </service>
 
-        <!-- sing-box VPN Service (handles real TUN interface) -->
-        <service
-            android:name="com.tim06.vpnprotocols.singbox.SingBoxVpnService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse"
-            android:permission="android.permission.BIND_VPN_SERVICE">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-        </service>
-
         <!-- Boot receiver -->
         <receiver
             android:name=".BootReceiver"

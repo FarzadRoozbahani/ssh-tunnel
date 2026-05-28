@@ -7,8 +7,61 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-libbox:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install Android NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'ndk;27.0.12077973'
+          accept-android-sdk-licenses: true
+
+      - name: Clone sing-box source
+        run: |
+          git clone --depth=1 --branch v1.10.3 \
+            https://github.com/SagerNet/sing-box.git /tmp/sing-box
+
+      - name: Install gomobile
+        run: |
+          cd /tmp/sing-box
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Build libbox.aar
+        run: |
+          cd /tmp/sing-box
+          gomobile init
+          # Build the libbox AAR using sing-box's own build script
+          go run ./cmd/internal/build_libbox \
+            --target android \
+            --output /tmp/libbox.aar \
+            || \
+          # Fallback: manual gomobile bind
+          gomobile bind \
+            -target=android/arm64,android/arm,android/amd64 \
+            -androidapi=26 \
+            -trimpath \
+            -v \
+            -o /tmp/libbox.aar \
+            ./experimental/libbox
+          ls -lh /tmp/libbox.aar
+
+      - name: Upload libbox AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox-aar
+          path: /tmp/libbox.aar
+
+  build-apk:
+    runs-on: ubuntu-latest
+    needs: build-libbox
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +75,12 @@ jobs:
         with:
           packages: 'platforms;android-34 build-tools;34.0.0'
           accept-android-sdk-licenses: true
+
+      - name: Download libbox AAR
+        uses: actions/download-artifact@v4
+        with:
+          name: libbox-aar
+          path: android/app/libs/
 
       - name: Grant execute permission
         run: chmod +x android/gradlew
