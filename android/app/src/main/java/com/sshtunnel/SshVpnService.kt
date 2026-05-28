@@ -25,6 +25,7 @@ class SshVpnService : VpnService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var vpnIface: ParcelFileDescriptor? = null
+    private var forwarder: VpnPacketForwarder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -36,7 +37,8 @@ class SshVpnService : VpnService() {
 
     private fun doStop() {
         isRunning = false
-        Tun2socksManager.stop()
+        forwarder?.stop()
+        forwarder = null
         try { vpnIface?.close() } catch (_: Exception) {}
         vpnIface = null
         scope.cancel()
@@ -55,7 +57,7 @@ class SshVpnService : VpnService() {
         val cfg = ProfileManager.getActive(this)
 
         scope.launch {
-            // 1. Connect SSH + SOCKS5
+            // Step 1: SSH + SOCKS5
             when (val r = TunnelManager.connect(cfg)) {
                 is ConnectResult.Failure -> {
                     TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = r.error)
@@ -65,15 +67,16 @@ class SshVpnService : VpnService() {
                 is ConnectResult.Success -> Log.i(TAG, "SSH ready")
             }
 
-            // 2. Build TUN interface
+            // Step 2: Build TUN
             val builder = Builder()
                 .setSession("SSH Tunnel")
-                .addAddress("10.8.0.1", 32)
+                .addAddress("10.8.0.2", 24)
+                .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
                 .setMtu(1500)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
+                .setBlocking(false)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", cfg.socksPort))
@@ -83,7 +86,6 @@ class SshVpnService : VpnService() {
 
             val iface = builder.establish()
             if (iface == null) {
-                Log.e(TAG, "VPN interface failed")
                 TunnelManager.disconnect()
                 TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "VPN interface failed")
                 withContext(Dispatchers.Main) { doStop() }
@@ -91,21 +93,16 @@ class SshVpnService : VpnService() {
             }
             vpnIface = iface
 
-            // 3. Start tun2socks: TUN fd → SOCKS5 :9000 → SSH → Internet
-            val ok = Tun2socksManager.start(
-                ctx        = applicationContext,
+            // Step 3: Start packet forwarder TUN → SOCKS5
+            val fwd = VpnPacketForwarder(
                 vpnService = this@SshVpnService,
                 tunFd      = iface,
                 socksPort  = cfg.socksPort
             )
+            fwd.start()
+            forwarder = fwd
 
-            if (!ok) {
-                Log.w(TAG, "tun2socks failed — VPN active but traffic may not route")
-            }
-
-            withContext(Dispatchers.Main) {
-                notify(if (ok) "VPN active — all traffic tunneled" else "VPN active (limited)")
-            }
+            withContext(Dispatchers.Main) { notify("VPN active — all traffic tunneled") }
             TunnelStateHolder.setState(TunnelState.CONNECTED, TunnelMode.VPN)
             watchdog()
         }
@@ -150,7 +147,6 @@ class SshVpnService : VpnService() {
             .setContentIntent(openPi)
             .addAction(R.drawable.ic_tile, "Disconnect", stopPi)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
