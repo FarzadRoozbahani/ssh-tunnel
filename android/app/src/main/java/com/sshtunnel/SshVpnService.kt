@@ -56,13 +56,7 @@ class SshVpnService : VpnService() {
                         .addDnsServer("8.8.8.8")
                         .setMtu(1500)
 
-                    // Add bypass domains / apps
-                    cfg.bypassDomains.forEach { domain ->
-                        if (domain.isNotBlank() && !domain.startsWith("ext:")) {
-                            try { addAllowedApplication(domain) } catch (_: Exception) {}
-                        }
-                    }
-                    // Always bypass ourselves
+                    // Always bypass our own app from the VPN
                     try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
 
                     vpnInterface = builder.establish()
