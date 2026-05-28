@@ -2,19 +2,22 @@ package com.sshtunnel
 
 import android.app.*
 import android.content.Intent
+import android.net.InetAddresses
+import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.libbox.NetworkInterfaceIterator
+import io.nekohasekai.libbox.Notification
 import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.InterfaceUpdateListener
-import io.nekohasekai.libbox.NetworkInterfaceIterator
-import io.nekohasekai.libbox.Notification
 import kotlinx.coroutines.*
 import java.io.File
+import java.net.InetAddress
 
 private const val TAG = "SshVpnService"
 
@@ -33,44 +36,62 @@ class SshVpnService : VpnService(), PlatformInterface {
     private var box: io.nekohasekai.libbox.BoxService? = null
     private var vpnIface: ParcelFileDescriptor? = null
 
-    // ── PlatformInterface — fixed return types from error log ─
-    override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
-
+    // ── PlatformInterface ─────────────────────────────────────
+    override fun usePlatformAutoDetectInterfaceControl() = true
     override fun autoDetectInterfaceControl(fd: Int) { protect(fd) }
 
     override fun openTun(options: TunOptions): Int {
-        val builder = Builder().setSession("SSH Tunnel").setMtu(options.mtu.toInt())
+        val builder = Builder()
+            .setSession("SSH Tunnel")
+            .setMtu(options.mtu.toInt())
 
-        // Try both naming conventions — one will work
-        try {
-            val a4 = options.inet4Address; builder.addAddress(a4, options.inet4Prefix.toInt())
-        } catch (_: Exception) {
-            try {
-                var it = options.inet4Addresses
-                while (it.hasNext()) { val a = it.next(); builder.addAddress(a.address, a.prefix.toInt()) }
-            } catch (_: Exception) {}
+        // IPv4 addresses — use GetInet4Address() iterator
+        var iter = options.inet4Address
+        while (iter.hasNext()) {
+            val prefix = iter.next()
+            builder.addAddress(prefix.address, prefix.prefix.toInt())
         }
 
-        try {
-            val a6 = options.inet6Address; builder.addAddress(a6, options.inet6Prefix.toInt())
-        } catch (_: Exception) {
-            try {
-                var it = options.inet6Addresses
-                while (it.hasNext()) { val a = it.next(); builder.addAddress(a.address, a.prefix.toInt()) }
-            } catch (_: Exception) {}
+        // IPv6 addresses
+        iter = options.inet6Address
+        while (iter.hasNext()) {
+            val prefix = iter.next()
+            builder.addAddress(prefix.address, prefix.prefix.toInt())
         }
 
-        // Default addresses if nothing worked
-        builder.addAddress("172.19.0.1", 30)
-        builder.addAddress("fdfe:dcba:9876::1", 126)
+        // DNS server
+        val dnsAddr = runCatching { options.dnsServerAddress }.getOrNull()
+        if (!dnsAddr.isNullOrBlank()) {
+            builder.addDnsServer(dnsAddr)
+        } else {
+            builder.addDnsServer("1.1.1.1")
+            builder.addDnsServer("8.8.8.8")
+        }
 
-        // Routes — route everything
-        builder.addRoute("0.0.0.0", 0)
-        builder.addRoute("::", 0)
+        // Routes
+        iter = options.inet4RouteAddress
+        while (iter.hasNext()) {
+            val r = iter.next()
+            builder.addRoute(r.address, r.prefix.toInt())
+        }
+        iter = options.inet6RouteAddress
+        while (iter.hasNext()) {
+            val r = iter.next()
+            builder.addRoute(r.address, r.prefix.toInt())
+        }
 
-        // DNS
-        builder.addDnsServer("1.1.1.1")
-        builder.addDnsServer("8.8.8.8")
+        // HTTP proxy
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            options.isHTTPProxyEnabled) {
+            runCatching {
+                builder.setHttpProxy(
+                    ProxyInfo.buildDirectProxy(
+                        options.httpProxyServer,
+                        options.httpProxyServerPort.toInt()
+                    )
+                )
+            }
+        }
 
         try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
 
@@ -79,26 +100,25 @@ class SshVpnService : VpnService(), PlatformInterface {
     }
 
     override fun writeLog(message: String) { Log.d(TAG, "box: $message") }
-
-    override fun useProcFS(): Boolean = false
+    override fun useProcFS() = false
 
     override fun findConnectionOwner(
         ipProtocol: Int, sourceAddress: String, sourcePort: Int,
         destinationAddress: String, destinationPort: Int
-    ): Int = 0
+    ) = 0
 
-    override fun packageNameByUid(uid: Int): String = ""
-    override fun uidByPackageName(packageName: String): Int = 0
+    override fun packageNameByUid(uid: Int) = ""
+    override fun uidByPackageName(packageName: String) = 0
 
-    override fun usePlatformDefaultInterfaceMonitor(): Boolean = true
+    override fun usePlatformDefaultInterfaceMonitor() = true
     override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {}
     override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {}
 
-    override fun usePlatformInterfaceGetter(): Boolean = false
+    override fun usePlatformInterfaceGetter() = false
     override fun getInterfaces(): NetworkInterfaceIterator = EmptyNetworkIterator()
 
-    override fun underNetworkExtension(): Boolean = false
-    override fun includeAllNetworks(): Boolean = false
+    override fun underNetworkExtension() = false
+    override fun includeAllNetworks() = false
     override fun clearDNSCache() {}
     override fun readWIFIState() = null
     override fun sendNotification(notification: Notification?) {}
@@ -166,36 +186,8 @@ class SshVpnService : VpnService(), PlatformInterface {
         val bypassList = bypass.filter { it.isNotBlank() && !it.startsWith("ext:") }
             .joinToString(",") { "\"$it\"" }
         val bypassRule = if (bypassList.isNotBlank())
-            """{ "domain_suffix": [$bypassList], "outbound": "direct" },""" else ""
-        return """
-{
-  "log": {"level":"warn"},
-  "dns": {
-    "servers": [
-      {"tag":"remote","address":"tls://1.1.1.1","detour":"proxy"},
-      {"tag":"local","address":"223.5.5.5","detour":"direct"}
-    ],
-    "rules": [{"outbound":"any","server":"local"}],
-    "final": "remote"
-  },
-  "inbounds": [{"type":"tun","tag":"tun-in",
-    "address": ["172.19.0.1/30","fdfe:dcba:9876::1/126"],
-    "mtu":9000,"auto_route":true,"strict_route":true,"stack":"system","sniff":true}],
-  "outbounds": [
-    {"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":$socksPort},
-    {"type":"direct","tag":"direct"},
-    {"type":"block","tag":"block"},
-    {"type":"dns","tag":"dns-out"}
-  ],
-  "route": {
-    "rules": [
-      {"protocol":"dns","outbound":"dns-out"},
-      $bypassRule
-      {"ip_is_private":true,"outbound":"direct"}
-    ],
-    "final":"proxy","auto_detect_interface":true
-  }
-}""".trimIndent()
+            """{"domain_suffix":[$bypassList],"outbound":"direct"},""" else ""
+        return """{"log":{"level":"warn"},"dns":{"servers":[{"tag":"r","address":"tls://1.1.1.1","detour":"proxy"},{"tag":"l","address":"223.5.5.5","detour":"direct"}],"rules":[{"outbound":"any","server":"l"}],"final":"r"},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"],"mtu":9000,"auto_route":true,"strict_route":true,"stack":"system","sniff":true}],"outbounds":[{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":$socksPort},{"type":"direct","tag":"direct"},{"type":"block","tag":"block"},{"type":"dns","tag":"dns-out"}],"route":{"rules":[{"protocol":"dns","outbound":"dns-out"},$bypassRule{"ip_is_private":true,"outbound":"direct"}],"final":"proxy","auto_detect_interface":true}}"""
     }
 
     private fun watchdog() = scope.launch {
@@ -211,7 +203,6 @@ class SshVpnService : VpnService(), PlatformInterface {
 
     override fun onDestroy() { doStop(); super.onDestroy() }
     override fun onRevoke()  { doStop(); super.onRevoke() }
-
     override fun onBind(intent: Intent?) =
         if (intent?.action == SERVICE_INTERFACE) super.onBind(intent) else null
 
@@ -221,7 +212,6 @@ class SshVpnService : VpnService(), PlatformInterface {
             getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
-
     private fun buildNotif(text: String): Notification {
         val stopPi = PendingIntent.getService(this, 200,
             Intent(this, SshVpnService::class.java).setAction(ACTION_STOP),
@@ -234,7 +224,6 @@ class SshVpnService : VpnService(), PlatformInterface {
             .addAction(R.drawable.ic_tile, "Disconnect", stopPi)
             .setOngoing(true).build()
     }
-
     private fun notify(text: String) =
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotif(text))
 }
