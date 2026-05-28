@@ -1,3 +1,5 @@
 -keep class com.jcraft.jsch.** { *; }
 -dontwarn com.jcraft.jsch.**
 -keep class com.sshtunnel.** { *; }
+-keep class tun2socks.** { *; }
+-dontwarn tun2socks.**

@@ -36,11 +36,13 @@ class SshVpnService : VpnService() {
 
     private fun doStop() {
         isRunning = false
-        scope.cancel()
-        TunnelManager.disconnect()
-        // Close VPN interface — this removes the key icon
+        // Stop tun2socks first
+        try { Tun2socks.Tun2socks.stop() } catch (_: Exception) {}
+        // Close TUN interface — this removes the key icon from status bar
         try { vpnIface?.close() } catch (_: Exception) {}
         vpnIface = null
+        scope.cancel()
+        TunnelManager.disconnect()
         TunnelStateHolder.setState(TunnelState.DISCONNECTED)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -55,50 +57,74 @@ class SshVpnService : VpnService() {
         val cfg = ProfileManager.getActive(this)
 
         scope.launch {
+            // Step 1: Connect SSH + start SOCKS5
             when (val r = TunnelManager.connect(cfg)) {
                 is ConnectResult.Failure -> {
                     TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = r.error)
                     withContext(Dispatchers.Main) { doStop() }
+                    return@launch
                 }
                 is ConnectResult.Success -> {
-                    val builder = Builder()
-                        .setSession("SSH Tunnel")
-                        .addAddress("10.8.0.1", 32)
-                        .addDnsServer("1.1.1.1")
-                        .addDnsServer("8.8.8.8")
-                        .setMtu(1500)
-                        .addRoute("0.0.0.0", 0)
-                        .addRoute("::", 0)
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        builder.setHttpProxy(
-                            ProxyInfo.buildDirectProxy("127.0.0.1", cfg.socksPort)
-                        )
-                    }
-
-                    try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
-
-                    val iface = builder.establish()
-                    if (iface == null) {
-                        TunnelManager.disconnect()
-                        TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "VPN interface failed")
-                        withContext(Dispatchers.Main) { doStop() }
-                        return@launch
-                    }
-                    vpnIface = iface
-
-                    withContext(Dispatchers.Main) { notify("VPN active") }
-                    TunnelStateHolder.setState(TunnelState.CONNECTED, TunnelMode.VPN, r.message)
-                    watchdog()
+                    Log.i(TAG, "SSH connected, building VPN interface")
                 }
             }
+
+            // Step 2: Build TUN interface
+            val builder = Builder()
+                .setSession("SSH Tunnel")
+                .addAddress("10.8.0.1", 32)
+                .addDnsServer("1.1.1.1")
+                .addDnsServer("8.8.8.8")
+                .setMtu(1500)
+                .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", cfg.socksPort))
+            }
+
+            try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
+
+            // Bypass apps in bypass list
+            cfg.bypassDomains.forEach { entry ->
+                if (entry.startsWith("app:")) {
+                    try { builder.addDisallowedApplication(entry.removePrefix("app:")) }
+                    catch (_: Exception) {}
+                }
+            }
+
+            val iface = builder.establish()
+            if (iface == null) {
+                Log.e(TAG, "Failed to establish VPN interface")
+                TunnelManager.disconnect()
+                TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "VPN interface failed")
+                withContext(Dispatchers.Main) { doStop() }
+                return@launch
+            }
+            vpnIface = iface
+
+            // Step 3: Start tun2socks — routes all TUN traffic → SOCKS5 → SSH
+            try {
+                val socksProxy = "socks5://127.0.0.1:${cfg.socksPort}"
+                Tun2socks.Tun2socks.start(iface.fd.toLong(), socksProxy)
+                Log.i(TAG, "tun2socks started → $socksProxy")
+            } catch (e: Exception) {
+                Log.e(TAG, "tun2socks failed: ${e.message}")
+                // Fall back — VPN interface stays up but no forwarding
+                // At least HTTP proxy (Android 10+) will still work
+            }
+
+            withContext(Dispatchers.Main) { notify("VPN active — all traffic tunneled") }
+            TunnelStateHolder.setState(TunnelState.CONNECTED, TunnelMode.VPN)
+            watchdog()
         }
     }
 
     private fun watchdog() = scope.launch {
         while (isRunning) {
-            delay(4_000)
+            delay(5_000)
             if (!TunnelManager.isAlive()) {
+                Log.w(TAG, "SSH connection lost")
                 TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "Connection lost")
                 withContext(Dispatchers.Main) { doStop() }
                 break
@@ -112,7 +138,6 @@ class SshVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        // Called by system when VPN is revoked (e.g. another VPN takes over)
         doStop()
         super.onRevoke()
     }
