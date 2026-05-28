@@ -1,0 +1,2 @@
+rootProject.name = "SSH Tunnel"
+include ':app'
