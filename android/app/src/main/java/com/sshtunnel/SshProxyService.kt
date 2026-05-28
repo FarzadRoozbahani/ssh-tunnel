@@ -22,10 +22,19 @@ class SshProxyService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_STOP  -> { doStop(); return START_NOT_STICKY }
             ACTION_START -> if (!isRunning) startProxy()
         }
         return START_NOT_STICKY
+    }
+
+    private fun doStop() {
+        isRunning = false
+        scope.cancel()
+        TunnelManager.disconnect()
+        TunnelStateHolder.setState(TunnelState.DISCONNECTED)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun startProxy() {
@@ -44,7 +53,7 @@ class SshProxyService : Service() {
                 }
                 is ConnectResult.Failure -> {
                     TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = r.error)
-                    stopSelf()
+                    doStop()
                 }
             }
         }
@@ -56,7 +65,7 @@ class SshProxyService : Service() {
             if (!TunnelManager.isAlive()) {
                 withContext(Dispatchers.Main) {
                     TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "Connection lost")
-                    stopSelf()
+                    doStop()
                 }
                 break
             }
@@ -65,7 +74,6 @@ class SshProxyService : Service() {
 
     override fun onDestroy() {
         isRunning = false
-        scope.cancel()
         TunnelManager.disconnect()
         TunnelStateHolder.setState(TunnelState.DISCONNECTED)
         super.onDestroy()
@@ -81,10 +89,9 @@ class SshProxyService : Service() {
     }
 
     private fun buildNotif(text: String): Notification {
-        // Disconnect PendingIntent — explicit action
-        val stopIntent = Intent(this, SshProxyService::class.java).setAction(ACTION_STOP)
         val stopPi = PendingIntent.getService(
-            this, 100, stopIntent,
+            this, 100,
+            Intent(this, SshProxyService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val openPi = PendingIntent.getActivity(

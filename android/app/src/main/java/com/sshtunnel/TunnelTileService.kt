@@ -33,11 +33,17 @@ class TunnelTileService : TileService() {
     override fun onClick() {
         super.onClick()
         if (TunnelStateHolder.isConnected) {
-            // Stop — send explicit STOP action
-            applicationContext.startService(
-                Intent(applicationContext, SshProxyService::class.java).apply { action = SshProxyService.ACTION_STOP })
-            applicationContext.startService(
-                Intent(applicationContext, SshVpnService::class.java).apply { action = SshVpnService.ACTION_STOP })
+            // Stop — send explicit STOP action to whichever is running
+            if (SshProxyService.isRunning)
+                applicationContext.startService(
+                    Intent(applicationContext, SshProxyService::class.java).apply { action = SshProxyService.ACTION_STOP })
+            if (SshVpnService.isRunning)
+                applicationContext.startService(
+                    Intent(applicationContext, SshVpnService::class.java).apply { action = SshVpnService.ACTION_STOP })
+            if (!SshProxyService.isRunning && !SshVpnService.isRunning) {
+                TunnelManager.disconnect()
+                TunnelStateHolder.setState(TunnelState.DISCONNECTED)
+            }
         } else {
             val startAction = Runnable {
                 val cfg = ProfileManager.getActive(applicationContext)

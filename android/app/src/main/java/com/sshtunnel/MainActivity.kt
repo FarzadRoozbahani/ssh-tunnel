@@ -90,9 +90,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun stopTunnel() {
-        // Send explicit STOP action to whichever service is running
-        startService(Intent(this, SshProxyService::class.java).apply { action = SshProxyService.ACTION_STOP })
-        startService(Intent(this, SshVpnService::class.java).apply { action = SshVpnService.ACTION_STOP })
+        // Send explicit STOP action — startService is needed to reach onStartCommand
+        if (SshProxyService.isRunning) {
+            startService(Intent(this, SshProxyService::class.java).apply { action = SshProxyService.ACTION_STOP })
+        }
+        if (SshVpnService.isRunning) {
+            startService(Intent(this, SshVpnService::class.java).apply { action = SshVpnService.ACTION_STOP })
+        }
+        // Fallback: if neither flag is set but we think we're connected, force disconnect
+        if (!SshProxyService.isRunning && !SshVpnService.isRunning) {
+            TunnelManager.disconnect()
+            TunnelStateHolder.setState(TunnelState.DISCONNECTED)
+        }
     }
 
     private fun doStartTunnel() {

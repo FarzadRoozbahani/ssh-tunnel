@@ -9,11 +9,6 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.net.InetSocketAddress
-import java.net.Socket
-import java.nio.ByteBuffer
 
 private const val TAG = "SshVpnService"
 
@@ -33,10 +28,22 @@ class SshVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP  -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_STOP  -> { doStop(); return START_NOT_STICKY }
             ACTION_START -> if (!isRunning) startVpn()
         }
         return START_NOT_STICKY
+    }
+
+    private fun doStop() {
+        isRunning = false
+        scope.cancel()
+        TunnelManager.disconnect()
+        // Close VPN interface — this removes the key icon
+        try { vpnIface?.close() } catch (_: Exception) {}
+        vpnIface = null
+        TunnelStateHolder.setState(TunnelState.DISCONNECTED)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun startVpn() {
@@ -51,143 +58,41 @@ class SshVpnService : VpnService() {
             when (val r = TunnelManager.connect(cfg)) {
                 is ConnectResult.Failure -> {
                     TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = r.error)
-                    withContext(Dispatchers.Main) { stopSelf() }
+                    withContext(Dispatchers.Main) { doStop() }
                 }
                 is ConnectResult.Success -> {
-                    // Build TUN interface
                     val builder = Builder()
                         .setSession("SSH Tunnel")
                         .addAddress("10.8.0.1", 32)
                         .addDnsServer("1.1.1.1")
                         .addDnsServer("8.8.8.8")
                         .setMtu(1500)
-                        .addRoute("0.0.0.0", 0)       // all IPv4
-                        .addRoute("::", 0)             // all IPv6
+                        .addRoute("0.0.0.0", 0)
+                        .addRoute("::", 0)
 
-                    // On Android 10+ set a proxy so HTTP/HTTPS apps use it directly
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         builder.setHttpProxy(
                             ProxyInfo.buildDirectProxy("127.0.0.1", cfg.socksPort)
                         )
                     }
 
-                    // Always exclude our own app to avoid VPN loop
                     try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
 
                     val iface = builder.establish()
                     if (iface == null) {
                         TunnelManager.disconnect()
                         TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "VPN interface failed")
-                        withContext(Dispatchers.Main) { stopSelf() }
+                        withContext(Dispatchers.Main) { doStop() }
                         return@launch
                     }
                     vpnIface = iface
 
-                    withContext(Dispatchers.Main) {
-                        notify("VPN active — all traffic tunneled")
-                    }
+                    withContext(Dispatchers.Main) { notify("VPN active") }
                     TunnelStateHolder.setState(TunnelState.CONNECTED, TunnelMode.VPN, r.message)
-
-                    // Start TUN → SOCKS5 packet forwarding
-                    forwardPackets(iface, cfg.socksPort)
                     watchdog()
                 }
             }
         }
-    }
-
-    /**
-     * Read IPv4/TCP packets from TUN, forward each connection via SOCKS5.
-     * Each unique TCP destination opens a new SOCKS5 connection.
-     */
-    private fun forwardPackets(iface: ParcelFileDescriptor, socksPort: Int) {
-        scope.launch(Dispatchers.IO) {
-            val ins = FileInputStream(iface.fileDescriptor)
-            val out = FileOutputStream(iface.fileDescriptor)
-            val buf = ByteArray(32767)
-
-            // We track active TCP sessions by (srcPort, dstIP, dstPort)
-            val sessions = mutableMapOf<Long, Socket>()
-
-            while (isRunning) {
-                try {
-                    val len = ins.read(buf)
-                    if (len < 20) continue
-
-                    val pkt = buf.copyOf(len)
-
-                    // IP version
-                    val version = (pkt[0].toInt() ushr 4) and 0xF
-                    if (version != 4) continue                 // IPv6 handled via proxy
-
-                    val proto = pkt[9].toInt() and 0xFF
-                    if (proto != 6) continue                   // TCP only
-
-                    val ihl  = (pkt[0].toInt() and 0x0F) * 4
-                    if (len < ihl + 20) continue               // too short
-
-                    // Destination IP
-                    val dstIp = "%d.%d.%d.%d".format(
-                        pkt[16].toInt() and 0xFF, pkt[17].toInt() and 0xFF,
-                        pkt[18].toInt() and 0xFF, pkt[19].toInt() and 0xFF
-                    )
-                    // Source port + dest port
-                    val srcPort = ((pkt[ihl].toInt() and 0xFF) shl 8) or (pkt[ihl+1].toInt() and 0xFF)
-                    val dstPort = ((pkt[ihl+2].toInt() and 0xFF) shl 8) or (pkt[ihl+3].toInt() and 0xFF)
-                    val tcpFlags = pkt[ihl + 13].toInt() and 0xFF
-                    val isSyn = (tcpFlags and 0x02) != 0
-                    val isFin = (tcpFlags and 0x01) != 0 || (tcpFlags and 0x04) != 0
-
-                    val sessionKey = (srcPort.toLong() shl 48) or
-                        (pkt[16].toLong() shl 24) or (pkt[17].toLong() shl 16) or
-                        (pkt[18].toLong() shl 8)  or pkt[19].toLong()
-
-                    if (isFin) {
-                        sessions.remove(sessionKey)?.runCatching { close() }
-                        continue
-                    }
-
-                    if (!isSyn) continue  // only handle connection setup here
-
-                    // New connection — open via SOCKS5
-                    launch(Dispatchers.IO) {
-                        val sock = openViaSocks5("127.0.0.1", socksPort, dstIp, dstPort)
-                        if (sock != null) {
-                            sessions[sessionKey] = sock
-                            // Relay data from SOCKS5 back — write to TUN
-                            // (simplified: real tun2socks needs full IP/TCP stack reconstruction)
-                        }
-                    }
-
-                } catch (e: Exception) {
-                    if (isRunning) Log.d(TAG, "packet: ${e.message}")
-                    delay(10)
-                }
-            }
-            // cleanup
-            sessions.values.forEach { runCatching { it.close() } }
-        }
-    }
-
-    private fun openViaSocks5(
-        proxyHost: String, proxyPort: Int,
-        destHost: String, destPort: Int
-    ): Socket? = try {
-        val s = Socket()
-        protect(s)   // ← critical: bypass VPN for this socket
-        s.connect(InetSocketAddress(proxyHost, proxyPort), 5_000)
-        val out = s.getOutputStream()
-        val inp = s.getInputStream()
-        out.write(byteArrayOf(5, 1, 0))
-        inp.read(ByteArray(2))
-        val host = destHost.toByteArray()
-        out.write(byteArrayOf(5, 1, 0, 3, host.size.toByte()) + host +
-            byteArrayOf((destPort shr 8).toByte(), (destPort and 0xFF).toByte()))
-        val rep = inp.read(ByteArray(10))
-        if (rep >= 2) s else null
-    } catch (e: Exception) {
-        Log.d(TAG, "socks5 open: ${e.message}")
-        null
     }
 
     private fun watchdog() = scope.launch {
@@ -195,20 +100,21 @@ class SshVpnService : VpnService() {
             delay(4_000)
             if (!TunnelManager.isAlive()) {
                 TunnelStateHolder.setState(TunnelState.DISCONNECTED, msg = "Connection lost")
-                withContext(Dispatchers.Main) { stopSelf() }
+                withContext(Dispatchers.Main) { doStop() }
                 break
             }
         }
     }
 
     override fun onDestroy() {
-        isRunning = false
-        scope.cancel()
-        TunnelManager.disconnect()
-        try { vpnIface?.close() } catch (_: Exception) {}
-        vpnIface = null
-        TunnelStateHolder.setState(TunnelState.DISCONNECTED)
+        doStop()
         super.onDestroy()
+    }
+
+    override fun onRevoke() {
+        // Called by system when VPN is revoked (e.g. another VPN takes over)
+        doStop()
+        super.onRevoke()
     }
 
     override fun onBind(intent: Intent?) =
