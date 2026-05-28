@@ -22,14 +22,19 @@ jobs:
           packages: 'ndk;25.2.9519653'
           accept-android-sdk-licenses: true
 
-      - name: Install gomobile (with matching mobile package)
+      - name: Setup gomobile workspace
         run: |
           MOBILE_VERSION=v0.0.0-20240213143359-d1f7d3436075
-          # Install gobind and gomobile from the same version
+
+          # Create a temp module to download mobile source
+          mkdir -p /tmp/mobile_setup
+          cd /tmp/mobile_setup
+          go mod init mobile_setup
+          go get golang.org/x/mobile@${MOBILE_VERSION}
+
+          # Install binaries
           go install golang.org/x/mobile/cmd/gobind@${MOBILE_VERSION}
           go install golang.org/x/mobile/cmd/gomobile@${MOBILE_VERSION}
-          # Download mobile source into GOPATH so gobind can find it
-          go get golang.org/x/mobile@${MOBILE_VERSION}
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: gomobile init
@@ -37,11 +42,7 @@ jobs:
 
       - name: Build tun2socks AAR
         working-directory: android/tun2socks
-        env:
-          GOPATH: ${{ env.GOPATH }}
         run: |
-          # Add mobile to this module explicitly
-          go get golang.org/x/mobile@v0.0.0-20240213143359-d1f7d3436075
           go mod tidy
           gomobile bind \
             -target=android/arm64,android/arm,android/amd64 \
