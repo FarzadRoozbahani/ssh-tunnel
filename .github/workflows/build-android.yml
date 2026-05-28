@@ -19,16 +19,23 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0'
+          accept-android-sdk-licenses: true
 
       - name: Grant execute permission to gradlew
         run: chmod +x android/gradlew
 
       - name: Build Debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --no-daemon --warning-mode all
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2g"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

@@ -1,3 +1,13 @@
 #!/bin/sh
-# Gradle wrapper
-exec gradle "$@"
+# Gradle start up script for POSIX systems
+APP_NAME="Gradle"
+APP_BASE_NAME=$(basename "$0")
+APP_HOME=$(dirname "$0")
+APP_HOME=$(cd "$APP_HOME" && pwd)
+
+DEFAULT_JVM_OPTS="-Xmx2048m -Dfile.encoding=UTF-8"
+
+CLASSPATH="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+
+exec java $DEFAULT_JVM_OPTS -classpath "$CLASSPATH" \
+  org.gradle.wrapper.GradleWrapperMain "$@"
