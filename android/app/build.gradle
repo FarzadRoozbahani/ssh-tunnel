@@ -34,10 +34,6 @@ android {
     packagingOptions {
         jniLibs { useLegacyPackaging = true }
     }
-
-    repositories {
-        flatDir { dirs 'libs' }
-    }
 }
 
 dependencies {
