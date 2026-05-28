@@ -22,42 +22,32 @@ jobs:
           packages: 'ndk;27.0.12077973'
           accept-android-sdk-licenses: true
 
-      - name: Clone sing-box source
+      - name: Clone sing-box
         run: |
           git clone --depth=1 --branch v1.10.3 \
             https://github.com/SagerNet/sing-box.git /tmp/sing-box
 
-      - name: Install gomobile
+      - name: Install sagernet/gomobile (sing-box's fork)
         run: |
           cd /tmp/sing-box
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
+          # sing-box uses its own gomobile fork
+          go install github.com/sagernet/gomobile/cmd/gomobile@latest
+          go install github.com/sagernet/gomobile/cmd/gobind@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: Build libbox.aar
         run: |
           cd /tmp/sing-box
-          gomobile init
-          # Build the libbox AAR using sing-box's own build script
+          # Use sing-box's own build script with correct flags
           go run ./cmd/internal/build_libbox \
-            --target android \
-            --output /tmp/libbox.aar \
-            || \
-          # Fallback: manual gomobile bind
-          gomobile bind \
-            -target=android/arm64,android/arm,android/amd64 \
-            -androidapi=26 \
-            -trimpath \
-            -v \
-            -o /tmp/libbox.aar \
-            ./experimental/libbox
-          ls -lh /tmp/libbox.aar
+            -target android
+          ls -lh /tmp/sing-box/libbox.aar
 
       - name: Upload libbox AAR
         uses: actions/upload-artifact@v4
         with:
           name: libbox-aar
-          path: /tmp/libbox.aar
+          path: /tmp/sing-box/libbox.aar
 
   build-apk:
     runs-on: ubuntu-latest
